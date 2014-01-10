@@ -105,7 +105,7 @@ pub fn opts() -> ~[groups::OptGroup] {
 }
 
 pub fn usage(argv0: &str) {
-    println(groups::usage(format!("{} [options] <input>", argv0), opts()));
+    println!("{}", groups::usage(format!("{} [options] <input>", argv0), opts()));
 }
 
 pub fn main_args(args: &[~str]) -> int {
@@ -116,10 +116,10 @@ pub fn main_args(args: &[~str]) -> int {
     }
 
     if matches.free.len() == 0 {
-        println("expected an input file to act on");
+        println!("expected an input file to act on");
         return 1;
     } if matches.free.len() > 1 {
-        println("only one input file may be specified");
+        println!("only one input file may be specified");
         return 1;
     }
     let input = matches.free[0].as_slice();
@@ -129,11 +129,11 @@ pub fn main_args(args: &[~str]) -> int {
     }
 
     if matches.opt_strs("passes") == ~[~"list"] {
-        println("Available passes for running rustdoc:");
+        println!("Available passes for running rustdoc:");
         for &(name, _, description) in PASSES.iter() {
             println!("{:>20s} - {}", name, description);
         }
-        println("\nDefault passes for rustdoc:");
+        println!("{}", "\nDefault passes for rustdoc:"); // FIXME: #9970
         for &name in DEFAULT_PASSES.iter() {
             println!("{:>20s}", name);
         }
