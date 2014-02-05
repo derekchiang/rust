@@ -217,7 +217,7 @@ impl GreenTask {
         match self.task_type {
             TypeGreen(Some(AnySched)) => { false }
             TypeGreen(Some(HomeSched(SchedHandle { sched_id: ref id, .. }))) => {
-                *id == sched.sched_id()
+                *id == sched.id
             }
             TypeGreen(None) => { rtabort!("task without home"); }
             TypeSched => {

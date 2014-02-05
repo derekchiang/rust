@@ -215,6 +215,7 @@ impl SchedPool {
             rtdebug!("inserting a regular scheduler");
 
             let mut sched = ~Scheduler::new(pool.id,
+                                            nscheds,
                                             (pool.factory)(),
                                             worker,
                                             pool.stealers.clone(),
@@ -276,6 +277,7 @@ impl SchedPool {
         // other schedulers as well as having a stealer handle to all other
         // schedulers.
         let mut sched = ~Scheduler::new(self.id,
+                                        self.handles.len(),
                                         (self.factory)(),
                                         worker,
                                         self.stealers.clone(),

@@ -15,6 +15,7 @@ use std::rt::rtio::{RemoteCallback, PausableIdleCallback, Callback, EventLoop};
 use std::rt::task::BlockedTask;
 use std::rt::task::Task;
 use std::sync::deque;
+use std::sync::atomics::{SeqCst, AtomicUint, INIT_ATOMIC_UINT};
 use std::unstable::mutex::Mutex;
 use std::unstable::raw;
 use mpsc = std::sync::mpsc_queue;
@@ -39,6 +40,13 @@ pub struct Scheduler {
     /// reawakening green tasks, this is used to ensure that tasks aren't
     /// reawoken on the wrong pool of schedulers.
     pool_id: uint,
+    /// ID number of this scheduler.  Each scheduler, except for the first
+    /// and the last one in the pool, have two neighbors, which are the
+    /// schedulers with neighboring ids.  A scheduler tries to wake up its
+    /// neighbors when a task enqueues.
+    id: uint,
+    /// The total number of schedulers in the pool
+    nscheds: uint,
     /// There are N work queues, one per scheduler.
     work_queue: deque::Worker<~GreenTask>,
     /// Work queues for the other schedulers. These are created by
@@ -121,6 +129,7 @@ impl Scheduler {
     // * Initialization Functions
 
     pub fn new(pool_id: uint,
+               nscheds: uint,
                event_loop: ~EventLoop,
                work_queue: deque::Worker<~GreenTask>,
                work_queues: ~[deque::Stealer<~GreenTask>],
@@ -128,12 +137,13 @@ impl Scheduler {
                state: TaskState)
         -> Scheduler {
 
-        Scheduler::new_special(pool_id, event_loop, work_queue, work_queues,
-                               sleeper_list, true, None, state)
+        Scheduler::new_special(pool_id, nscheds, event_loop, work_queue,
+                               work_queues, sleeper_list, true, None, state)
 
     }
 
     pub fn new_special(pool_id: uint,
+                       nscheds: uint,
                        event_loop: ~EventLoop,
                        work_queue: deque::Worker<~GreenTask>,
                        work_queues: ~[deque::Stealer<~GreenTask>],
@@ -142,10 +152,13 @@ impl Scheduler {
                        friend: Option<SchedHandle>,
                        state: TaskState)
         -> Scheduler {
+        static mut SCHED_ID: AtomicUint = INIT_ATOMIC_UINT;
 
         let (consumer, producer) = mpsc::queue(());
         let mut sched = Scheduler {
             pool_id: pool_id,
+            id: unsafe { SCHED_ID.fetch_add(1, SeqCst) },
+            nscheds: nscheds,
             sleeper_list: sleeper_list,
             message_queue: consumer,
             message_producer: producer,
@@ -197,7 +210,7 @@ impl Scheduler {
         // the "scheduler" context. The scheduler immediately hands over control
         // to the event loop, and this will only exit once the event loop no
         // longer has any references (handles or I/O objects).
-        rtdebug!("starting scheduler {}", self.sched_id());
+        rtdebug!("starting scheduler {}", self.id);
         let mut sched_task = self.run(sched_task);
 
         // Close the idle callback.
@@ -211,7 +224,7 @@ impl Scheduler {
         // cleaning up the memory it uses. As we didn't actually call
         // task.run() on the scheduler task we never get through all
         // the cleanup code it runs.
-        rtdebug!("stopping scheduler {}", stask.sched.get_ref().sched_id());
+        rtdebug!("stopping scheduler {}", stask.sched.get_ref().id);
 
         // Should not have any messages
         let message = stask.sched.get_mut_ref().message_queue.pop();
@@ -491,7 +504,7 @@ impl Scheduler {
 
         match next.take_unwrap_home() {
             HomeSched(home_handle) => {
-                if home_handle.sched_id != self.sched_id() {
+                if home_handle.sched_id != self.id {
                     rtdebug!("sending task home");
                     next.give_home(HomeSched(home_handle));
                     Scheduler::send_task_home(next);
@@ -556,13 +569,21 @@ impl Scheduler {
         // We've made work available. Notify a
         // sleeping scheduler.
 
-        match self.sleeper_list.casual_pop() {
-            Some(handle) => {
-                let mut handle = handle;
-                handle.send(Wake)
-            }
-            None => { (/* pass */) }
-        };
+        for _ in range(0, self.nscheds) {
+            match self.sleeper_list.casual_pop() {
+                Some(handle) => {
+                    // We only try to wake up the two neighbors
+                    if handle.sched_id == (self.id - 1) || handle.sched_id == (self.id + 1) {
+                        let mut handle = handle;
+                        handle.send(Wake);
+                    } else {
+                        // If it's not our neighbor, we push it back
+                        self.sleeper_list.push(handle);
+                    }
+                }
+                None => { (/* pass */) }
+            };
+        }
     }
 
     // * Core Context Switching Functions
@@ -816,8 +837,6 @@ impl Scheduler {
 
     // * Utility Functions
 
-    pub fn sched_id(&self) -> uint { unsafe { cast::transmute(self) } }
-
     pub fn run_cleanup_job(&mut self) {
         let cleanup_job = self.cleanup_job.take_unwrap();
         cleanup_job.run(self)
@@ -829,7 +848,7 @@ impl Scheduler {
         return SchedHandle {
             remote: remote,
             queue: self.message_producer.clone(),
-            sched_id: self.sched_id()
+            sched_id: self.id,
         }
     }
 }
@@ -986,7 +1005,7 @@ mod test {
         let mut task = Local::borrow(None::<Task>);
         match task.get().maybe_take_runtime::<GreenTask>() {
             Some(green) => {
-                let ret = green.sched.get_ref().sched_id();
+                let ret = green.sched.get_ref().id;
                 task.get().put_runtime(green as ~Runtime);
                 return ret;
             }
